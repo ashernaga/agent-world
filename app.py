@@ -21,9 +21,9 @@ THEME_FILE = Path.home() / ".agent_controller" / "theme.txt"
 # Look & feel injected into the existing page (the page itself is untouched).
 # Dark is the default; the light palette overrides the same CSS variables.
 THEME_CSS = """
-:root{--accent:#4f7cff;--accent-h:#6b92ff;--r:8px}
+:root{--accent:#4f7cff;--accent-h:#6b92ff;--r:8px;--btn:#3a4254;--btn-h:#465068;--btn-t:#e6e8ee}
 :root[data-theme=light]{--bg:#f4f5f8;--panel:#fff;--line:#e2e5ec;--text:#1b1f29;
-  --mute:#667085;--add:#dcf5e5;--del:#fde3e3;--ok:#16a068;--bad:#d64545;--ctl:#7b8498}
+  --mute:#667085;--add:#dcf5e5;--del:#fde3e3;--ok:#16a068;--bad:#d64545;--ctl:#7b8498;--btn:#6b7488;--btn-h:#5a6377;--btn-t:#fff}
 :root[data-theme=light] .h{background:#f1f3f7}
 :root[data-theme=light] .tag,:root[data-theme=light] .dot{background:#e3e6ee}
 :root[data-theme=light] .tag.applied{background:#dcf5e5}
@@ -35,28 +35,28 @@ h2{display:flex;align-items:center;gap:8px;height:52px;padding:0 18px;font-size:
 h2::before{content:"";width:3px;height:16px;border-radius:2px;background:var(--accent)}
 #diffwrap h2{border-top:1px solid var(--line)}
 button{border-radius:var(--r);font-weight:500;transition:background .15s,border-color .15s,opacity .15s}
-#send{background:var(--accent);padding:0 22px}
-#send:hover:not(:disabled){background:var(--accent-h)}
+#send,#ok,#no,#themebtn{background:var(--btn);color:var(--btn-t);border:1px solid transparent}
+#send:hover:not(:disabled),#ok:hover,#no:hover,#themebtn:hover{background:var(--btn-h)}
+#send{padding:0 22px}
 #act button{height:38px}
-#ok{background:var(--ok);color:#fff}
-#ok:hover{filter:brightness(1.08)}
-#no{background:transparent;color:var(--bad);border:1px solid var(--bad)}
-#no:hover{background:color-mix(in srgb,var(--bad) 12%,transparent)}
 textarea{border-radius:var(--r)}textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .bub{border-radius:10px}
-#themebtn{margin-left:auto;height:30px;padding:0 12px;font-size:12px;color:var(--text);
-  background:transparent;border:1px solid var(--line)}
-#themebtn:hover{border-color:var(--accent)}
+#themebtn{margin-left:auto;width:34px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+#themebtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+:root.tx,:root.tx *{transition:background-color .45s ease,color .45s ease,border-color .45s ease}
 """
 
 THEME_JS = """
 (function(){
   var root=document.documentElement,T="__TOKEN__";
   var b=document.createElement("button");b.id="themebtn";b.type="button";
-  function apply(t){root.setAttribute("data-theme",t);b.textContent=t==="dark"?"Light mode":"Dark mode";}
+  var MOON='<svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+      SUN='<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  function apply(t){root.setAttribute("data-theme",t);b.innerHTML=t==="dark"?MOON:SUN;
+    b.title="Switch to "+(t==="dark"?"light":"dark")+" mode";b.setAttribute("aria-label",b.title);}
   document.querySelector("section h2").append(b);
   b.onclick=function(){
-    var t=root.getAttribute("data-theme")==="dark"?"light":"dark";apply(t);
+    var t=root.getAttribute("data-theme")==="dark"?"light":"dark";root.classList.add("tx");apply(t);setTimeout(function(){root.classList.remove("tx")},500);
     fetch("/api/theme",{method:"POST",headers:{"X-Token":T,"Content-Type":"application/json"},
       body:JSON.stringify({theme:t})});
   };
