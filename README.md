@@ -14,3 +14,8 @@ Multi-agent workflow with human approval: GPT plans, Claude proposes a diff, you
 chat with all agents, step progress, a colored diff with Approve/Reject buttons, and task history.
 The terminal version (`python -m agent_controller.main`) still works.
 History is stored outside the repo in `~/.agent_controller/`.
+
+## Desktop app (native window)
+`python app.py` opens the same interface in its own desktop window instead of a browser tab.
+It needs `pywebview` (included in `requirements.txt`) and runs the local server on a free port.
+The browser and terminal versions keep working.
