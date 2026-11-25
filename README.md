@@ -3,9 +3,9 @@
 Multi-agent workflow with human approval: GPT plans, Claude proposes a diff, you approve, the patch is verified in a temporary worktree and applied, then checked and reviewed.
 
 ## Setup
-1. `pip install -r requirements.txt`
+1. `pip install -r requirements.txt` (Python 3.10+).
 2. Install the Claude CLI (`claude` must work in a terminal).
-3. Copy `.env.example` to `.env` and add `OPENAI_API_KEY`.
+3. Create a `.env` file in the project root containing at least `OPENAI_API_KEY=...`. Optional: `OPENAI_MODEL`, `CLAUDE_MODEL`, `LOCAL_LLM_API_KEY`.
 4. Commit your files (the controller refuses to run with uncommitted changes).
 5. Run `python -m agent_controller.main` from this folder.
 
@@ -19,6 +19,14 @@ History is stored outside the repo in `~/.agent_controller/`.
 `python app.py` opens the same interface in its own desktop window instead of a browser tab.
 It needs `pywebview` (included in `requirements.txt`) and runs the local server on a free port.
 The browser and terminal versions keep working.
+`python app.py --smoke` starts the server, checks that it responds, and exits without opening a window.
+
+Extra controls in the desktop app:
+- **Git**: read-only overview of the repository (remote, current branch, changed files, local and remote branches).
+- **Commits**: the last 50 commits.
+- **Models**: per-role model choice (see below).
+- Theme button: switches between light and dark mode; the choice is saved to `~/.agent_controller/theme.txt`.
+- **Next steps**: after the GPT review of an applied change, copyable Git commands to commit it, commit it to a new `agent/...` branch (offered first when you are on `main` or `master`), or undo it while it is still uncommitted.
 
 ## Switching models (desktop app)
 Only API keys need to be in `.env`. In `python app.py`, the **Models** button chooses the model for each role and saves the choice to `~/.agent_controller/models.json`. It applies from the next agent call; no restart is needed.
@@ -45,3 +53,10 @@ Running the app sets up a controlled environment in which the agents cooperate o
 5. Checks run and the reviewer reports on the applied change.
 
 Model choices per role are set in the desktop app's **Models** panel (see above); task history is kept in `~/.agent_controller/`.
+
+## Safety and limits
+- Nothing is staged or committed for you. Inspect an applied change with `git diff`; the result also shows an undo command.
+- Approval creates a signed, single-use receipt tied to the exact diff and the current commit. A stale or edited proposal is refused.
+- Proposals can only edit existing files tracked by Git. They cannot touch `agent_controller/`, `scripts/`, `tests/`, `CLAUDE.md`, `.git*` files or `.env*` files; change those by hand.
+- Checks: a Python syntax check of the changed files, plus `python -m unittest discover -s tests` if a `tests/` folder exists (15-minute timeout).
+- Check results are only reported; they do not roll back the change.
