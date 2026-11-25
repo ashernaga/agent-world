@@ -50,6 +50,10 @@ textarea{border-radius:var(--r)}textarea:focus{outline:2px solid var(--accent);o
 .cp{float:right;height:22px;padding:0 8px;margin-left:8px;font-size:11px;background:var(--btn);color:var(--btn-t);border:0;cursor:pointer!important}
 #cbtn{margin-left:auto;height:30px;padding:0 12px;background:var(--btn);color:var(--btn-t);border:1px solid transparent;font-size:12px}
 #cbtn+#themebtn{margin-left:8px}
+#gbtn{margin-left:auto;height:30px;padding:0 12px;background:var(--btn);color:var(--btn-t);border:1px solid transparent;font-size:12px}
+#gbtn+#cbtn{margin-left:8px}
+.gi{padding:3px 0;font:12.5px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.gi.cur{color:var(--accent);font-weight:600}
 #ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:9}
 #ov.on{display:flex}
 #ovb{width:min(760px,92vw);max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 20px;-webkit-user-select:text;user-select:text}
@@ -90,6 +94,22 @@ THEME_JS = r"""
   var cb=document.createElement("button");cb.id="cbtn";cb.type="button";cb.textContent="Commits";
   cb.onclick=function(){get("/api/commits").then(function(c){show("Recent commits",c.error?[c.error]:c)})};
   document.querySelector("section h2").insertBefore(cb,b);
+  var gb=document.createElement("button");gb.id="gbtn";gb.type="button";gb.textContent="Git";
+  gb.onclick=function(){get("/api/git").then(function(g){
+    if(g.error){show("Git",[g.error]);return}
+    show("Git: "+g.repo,[]);
+    function sec(t,items){
+      var h=document.createElement("b");h.textContent=t;box.append(h);
+      items.forEach(function(x){var d=document.createElement("div");d.className="gi"+(x.cur?" cur":"");
+        d.textContent=(x.cur?"* ":"  ")+x.text;box.append(d)});
+      if(!items.length){var e=document.createElement("div");e.className="gi";e.textContent="(none)";box.append(e)}
+    }
+    sec("Overview",[{text:"Remote: "+(g.remote||"none")},{text:"Current branch: "+(g.current||"detached HEAD")},
+      {text:"Working tree: "+(g.changed?g.changed+" changed file(s)":"clean")}]);
+    sec("Local branches",g.local.map(function(x){return {cur:x.current,text:x.name+"  "+x.date+"  "+x.subject}}));
+    sec("Remote branches",g.remote_branches.map(function(x){return {text:x.name+"  "+x.date+"  "+x.subject}}));
+  })};
+  document.querySelector("section h2").insertBefore(gb,cb);
   var hl=document.getElementById("histlist");
   hl.addEventListener("click",function(e){
     var el=e.target.closest(".h");if(!el)return;
@@ -182,6 +202,36 @@ def load_theme():
     return theme if theme in ("dark", "light") else "dark"
 
 
+def _git(*args):
+    return subprocess.run(
+        ["git", *args], cwd=PROJECT_ROOT, capture_output=True,
+        text=True, encoding="utf-8", timeout=15, check=True,
+    ).stdout.strip()
+
+
+def git_info():
+    """Read-only repository summary for the in-app Git panel."""
+    try:
+        remote = _git("remote", "get-url", "origin")
+    except subprocess.CalledProcessError:
+        remote = ""
+    current = _git("branch", "--show-current")
+    changed = len(_git("status", "--porcelain").splitlines())
+    fmt = "%(refname)\t%(committerdate:short)\t%(subject)"
+    local, remote_branches = [], []
+    for line in _git("for-each-ref", f"--format={fmt}", "refs/heads", "refs/remotes").splitlines():
+        ref, date, subject = (line.split("\t", 2) + ["", ""])[:3]
+        if ref.endswith("/HEAD"):
+            continue
+        if ref.startswith("refs/heads/"):
+            name = ref[len("refs/heads/"):]
+            local.append({"name": name, "current": name == current, "date": date, "subject": subject})
+        elif ref.startswith("refs/remotes/"):
+            remote_branches.append({"name": ref[len("refs/remotes/"):], "date": date, "subject": subject})
+    return {"repo": PROJECT_ROOT.name, "remote": remote, "current": current,
+            "changed": changed, "local": local, "remote_branches": remote_branches}
+
+
 class ThemedHandler(Handler):
     """Same server as web_ui, plus a saved light/dark theme and modern styling."""
 
@@ -204,6 +254,13 @@ class ThemedHandler(Handler):
             except (OSError, subprocess.SubprocessError) as error:
                 return self._json({"error": f"git failed: {error}"}, 500)
             return self._json({"branch": branch})
+        if self.path.split("?")[0] == "/api/git":
+            if not self._local_only() or not self._authorized():
+                return self._json({"error": "unauthorized"}, 401)
+            try:
+                return self._json(git_info())
+            except (OSError, subprocess.SubprocessError) as error:
+                return self._json({"error": f"git failed: {error}"}, 500)
         if self.path.split("?")[0] != "/api/commits":
             return super().do_GET()
         if not self._local_only() or not self._authorized():
