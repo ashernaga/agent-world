@@ -30,6 +30,13 @@ THEME_CSS = """
 :root[data-theme=light] .tag.applied{background:#dcf5e5}
 :root[data-theme=light] .tag.rejected{background:#fdeccf;color:#a76100}
 :root[data-theme=light] .hh{color:#2b5be0}
+:root[data-theme=pink]{--accent:#e0509a;--accent-h:#ec6fb0;--bg:#fff0f7;--panel:#fffafd;--line:#f6cfe3;--text:#4a1d36;
+  --mute:#9a5a7c;--add:#d7f3e3;--del:#fde3e3;--ok:#16a068;--bad:#d64545;--ctl:#c77aa3;--btn:#e0509a;--btn-h:#c93f86;--btn-t:#fff}
+:root[data-theme=pink] .h{background:#ffe3f0}
+:root[data-theme=pink] .tag,:root[data-theme=pink] .dot{background:#f9d3e6}
+:root[data-theme=pink] .tag.rejected{background:#fdeccf;color:#a76100}
+:root[data-theme=pink] .hh{color:#c2347e}
+#themebtn .uni{font-size:15px;line-height:1}
 body{font-size:13.5px}
 h2{display:flex;align-items:center;gap:8px;height:52px;padding:0 18px;font-size:13px;
   font-weight:600;letter-spacing:0;text-transform:none;color:var(--text);background:var(--panel)}
@@ -61,12 +68,14 @@ THEME_JS = """
   var root=document.documentElement,T="__TOKEN__";
   var b=document.createElement("button");b.id="themebtn";b.type="button";
   var MOON='<svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
-      SUN='<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
-  function apply(t){root.setAttribute("data-theme",t);b.innerHTML=t==="dark"?MOON:SUN;
-    b.title="Switch to "+(t==="dark"?"light":"dark")+" mode";b.setAttribute("aria-label",b.title);}
+      SUN='<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+      UNI='<span class="uni">\ud83e\udd84</span>',
+      NEXT={dark:"light",light:"pink",pink:"dark"};
+  function apply(t){root.setAttribute("data-theme",t);b.innerHTML=t==="dark"?MOON:t==="light"?SUN:UNI;
+    b.title="Switch to "+NEXT[t]+" mode";b.setAttribute("aria-label",b.title);}
   document.querySelector("section h2").append(b);
   b.onclick=function(){
-    var t=root.getAttribute("data-theme")==="dark"?"light":"dark";root.classList.add("tx");apply(t);setTimeout(function(){root.classList.remove("tx")},500);
+    var t=NEXT[root.getAttribute("data-theme")]||"dark";root.classList.add("tx");apply(t);setTimeout(function(){root.classList.remove("tx")},500);
     fetch("/api/theme",{method:"POST",headers:{"X-Token":T,"Content-Type":"application/json"},
       body:JSON.stringify({theme:t})});
   };
@@ -114,7 +123,7 @@ def load_theme():
         theme = THEME_FILE.read_text(encoding="utf-8").strip()
     except OSError:
         return "dark"
-    return theme if theme in ("dark", "light") else "dark"
+    return theme if theme in ("dark", "light", "pink") else "dark"
 
 
 class ThemedHandler(Handler):
@@ -152,7 +161,7 @@ class ThemedHandler(Handler):
             theme = json.loads(self.rfile.read(length) or b"{}").get("theme")
         except ValueError:
             return self._json({"error": "bad json"}, 400)
-        if theme not in ("dark", "light"):
+        if theme not in ("dark", "light", "pink"):
             return self._json({"error": "bad theme"}, 400)
         THEME_FILE.parent.mkdir(parents=True, exist_ok=True)
         THEME_FILE.write_text(theme, encoding="utf-8")
