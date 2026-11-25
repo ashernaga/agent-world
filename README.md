@@ -27,3 +27,21 @@ Only API keys need to be in `.env`. In `python app.py`, the **Models** button ch
 - Local Qwen with Ollama: `ollama pull qwen3-coder`, then pick the "Local Qwen (Ollama)" preset. Give the proposer a large context window (64k+).
 - Optional `LOCAL_LLM_API_KEY` in `.env` if your local server needs a key. `OPENAI_API_KEY` is still required at startup.
 - The terminal (`agent_controller.main`) and browser (`agent_controller.web_ui`) versions keep using `.env`.
+
+## Agent compatibility
+
+The workflow is organized by role, not tied to one vendor. Each role can use any model served through a compatible API:
+- **Planner and reviewer (GPT role):** any OpenAI-compatible server with the Responses endpoint (OpenAI, Ollama, vLLM, LM Studio).
+- **Proposer (Claude role):** the Claude CLI, talking to Anthropic or any Anthropic-compatible endpoint (for example Ollama).
+- Other agents (different CLIs or custom tools) are not plugged in yet. Supporting one means adding an adapter alongside `agent_controller/openai_agent.py` and `agent_controller/claude_agent.py`.
+
+## Multi-agent workflow environment
+
+Running the app sets up a controlled environment in which the agents cooperate on one task:
+1. The planner turns your request into an investigation plan.
+2. The proposer inspects the repository read-only and returns a unified diff.
+3. You approve or reject the diff.
+4. The patch is verified in a temporary Git worktree, then applied to your working tree.
+5. Checks run and the reviewer reports on the applied change.
+
+Model choices per role are set in the desktop app's **Models** panel (see above); task history is kept in `~/.agent_controller/`.
