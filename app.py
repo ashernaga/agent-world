@@ -53,10 +53,16 @@ textarea{border-radius:var(--r)}textarea:focus{outline:2px solid var(--accent);o
 #ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:9}
 #ov.on{display:flex}
 #ovb{width:min(760px,92vw);max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 20px;-webkit-user-select:text;user-select:text}
+.nx{margin-top:10px;padding-top:8px;border-top:1px solid var(--line);white-space:normal}
+.nx b{display:block;font-size:12px;margin-bottom:4px}
+.nxr{margin:6px 0}
+.nxr small{display:flex!important;align-items:center;justify-content:space-between;color:var(--mute);margin:0 0 3px}
+.nxr pre{margin:0;padding:6px 8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.nxc{height:20px;padding:0 8px;font-size:11px;background:var(--btn);color:var(--btn-t);border:0;cursor:pointer!important}
 .ci{padding:6px 0;border-bottom:1px solid var(--line);font:12.5px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
 """
 
-THEME_JS = """
+THEME_JS = r"""
 (function(){
   var root=document.documentElement,T="__TOKEN__";
   var b=document.createElement("button");b.id="themebtn";b.type="button";
@@ -95,7 +101,7 @@ THEME_JS = """
     if(bub.querySelector(".cp"))return;
     var c=document.createElement("button");c.className="cp";c.type="button";c.textContent="Copy";
     c.onclick=function(){
-      var k=bub.cloneNode(true);k.querySelectorAll(".cp,small").forEach(function(n){n.remove()});
+      var k=bub.cloneNode(true);k.querySelectorAll(".cp,small,.nx").forEach(function(n){n.remove()});
       var t=k.textContent;
       (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).catch(function(){
         var a=document.createElement("textarea");a.value=t;document.body.append(a);a.select();document.execCommand("copy");a.remove()});
@@ -103,9 +109,67 @@ THEME_JS = """
     };
     bub.insertBefore(c,bub.firstChild);
   }
+  // ---- "Next steps" block under GPT reviews -------------------------
+  function bodyText(el){
+    var k=el.cloneNode(true);k.querySelectorAll(".cp,small,.nx").forEach(function(n){n.remove()});
+    return k.textContent.trim();
+  }
+  function q(v){return "'"+String(v).replace(/'/g,"''")+"'"}  // PowerShell-safe single quotes
+  function slug(t){
+    var s=t.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,40).replace(/-+$/,"");
+    return s||"change";
+  }
+  // Collect data for ONE task: walk back from the review to that task's own
+  // "You" message. Nothing from earlier tasks is used.
+  function taskData(msg){
+    var d={task:"",summary:"",files:[],applied:false},n=msg.previousElementSibling;
+    while(n){
+      var b=n.querySelector(".bub");
+      if(n.classList.contains("user")){d.task=b?bodyText(b):"";break}
+      if(b&&n.classList.contains("result")){
+        var t=bodyText(b);
+        if(/^Patch applied/.test(t)){d.applied=true;
+          var sec=t.split("Files changed:")[1]||"";sec=sec.split("To undo:")[0];
+          sec.split("\n").forEach(function(l){var m=l.match(/^\s*-\s+(.+?)\s*$/);if(m)d.files.push(m[1])});}
+      }
+      if(b&&n.classList.contains("agent")&&n.querySelector(".av.Claude")&&!d.summary)
+        d.summary=bodyText(b).split("\n")[0].trim();
+      n=n.previousElementSibling;
+    }
+    return d;
+  }
+  function row(title,lines){
+    var r=document.createElement("div");r.className="nxr";
+    var h=document.createElement("small");var l=document.createElement("span");l.textContent=title;h.append(l);
+    var c=document.createElement("button");c.type="button";c.className="nxc";c.textContent="Copy";
+    var cmd=lines.join("\n");
+    c.onclick=function(){
+      (navigator.clipboard?navigator.clipboard.writeText(cmd):Promise.reject()).catch(function(){
+        var a=document.createElement("textarea");a.value=cmd;document.body.append(a);a.select();document.execCommand("copy");a.remove()});
+      c.textContent="Copied";setTimeout(function(){c.textContent="Copy"},1200);
+    };
+    h.append(c);var p=document.createElement("pre");p.textContent=cmd;r.append(h,p);return r;
+  }
+  function addNext(msg){
+    if(msg.dataset.nx)return;msg.dataset.nx="1";
+    var bub=msg.querySelector(".bub");if(!bub||!/^VERDICT:/.test(bodyText(bub)))return;
+    var d=taskData(msg);if(!d.applied||!d.files.length)return;
+    var summary=(d.summary||d.task||"update").replace(/\s+/g," ").slice(0,72);
+    var msgArg=q("Agent: "+summary),br="agent/"+slug(d.task||summary);
+    get("/api/branch").then(function(r){return r.branch||""},function(){return ""}).then(function(cur){
+      var box=document.createElement("div");box.className="nx";
+      var h=document.createElement("b");h.textContent="Next steps"+(cur?" (on branch "+cur+")":"");box.append(h);
+      var commit=row("Commit everything",["git add -A","git commit -m "+msgArg]);
+      var branch=row("Commit to a new branch",["git switch -c "+br,"git add -A","git commit -m "+msgArg,"git push -u origin "+br]);
+      var undo=row("Undo this change (only while uncommitted)",["git restore -- "+d.files.map(q).join(" ")]);
+      if(cur==="main"||cur==="master")box.append(branch,commit);else box.append(commit,branch);
+      box.append(undo);bub.append(box);
+    });
+  }
   var chat=document.getElementById("chat");
-  new MutationObserver(function(){chat.querySelectorAll(".bub").forEach(addCopy)}).observe(chat,{childList:true});
-  chat.querySelectorAll(".bub").forEach(addCopy);
+  function decorate(){chat.querySelectorAll(".bub").forEach(addCopy);chat.querySelectorAll(".m.agent").forEach(addNext)}
+  new MutationObserver(decorate).observe(chat,{childList:true});
+  decorate();
 })();
 """
 
@@ -129,6 +193,17 @@ class ThemedHandler(Handler):
         super()._send(code, body, ctype)
 
     def do_GET(self):
+        if self.path.split("?")[0] == "/api/branch":
+            if not self._local_only() or not self._authorized():
+                return self._json({"error": "unauthorized"}, 401)
+            try:
+                branch = subprocess.run(
+                    ["git", "branch", "--show-current"], cwd=PROJECT_ROOT,
+                    capture_output=True, text=True, encoding="utf-8", timeout=15,
+                ).stdout.strip()
+            except (OSError, subprocess.SubprocessError) as error:
+                return self._json({"error": f"git failed: {error}"}, 500)
+            return self._json({"branch": branch})
         if self.path.split("?")[0] != "/api/commits":
             return super().do_GET()
         if not self._local_only() or not self._authorized():
@@ -151,7 +226,7 @@ class ThemedHandler(Handler):
         length = int(self.headers.get("Content-Length") or 0)
         try:
             theme = json.loads(self.rfile.read(length) or b"{}").get("theme")
-        except ValueError:
+        except (ValueError, AttributeError):
             return self._json({"error": "bad json"}, 400)
         if theme not in ("dark", "light"):
             return self._json({"error": "bad theme"}, 400)
