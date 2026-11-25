@@ -19,3 +19,11 @@ History is stored outside the repo in `~/.agent_controller/`.
 `python app.py` opens the same interface in its own desktop window instead of a browser tab.
 It needs `pywebview` (included in `requirements.txt`) and runs the local server on a free port.
 The browser and terminal versions keep working.
+
+## Switching models (desktop app)
+Only API keys need to be in `.env`. In `python app.py`, the **Models** button chooses the model for each role and saves the choice to `~/.agent_controller/models.json`. It applies from the next agent call; no restart is needed.
+- Empty fields use the defaults (`OPENAI_MODEL` / `CLAUDE_MODEL` in `.env` still work as fallbacks).
+- **Base URL** switches a role to another server. Planner: any OpenAI-compatible API with the Responses endpoint (Ollama `http://localhost:11434/v1`, vLLM, LM Studio). Proposer: an Anthropic-compatible API for the Claude CLI (Ollama `http://localhost:11434`).
+- Local Qwen with Ollama: `ollama pull qwen3-coder`, then pick the "Local Qwen (Ollama)" preset. Give the proposer a large context window (64k+).
+- Optional `LOCAL_LLM_API_KEY` in `.env` if your local server needs a key. `OPENAI_API_KEY` is still required at startup.
+- The terminal (`agent_controller.main`) and browser (`agent_controller.web_ui`) versions keep using `.env`.
