@@ -18,8 +18,16 @@ History is stored outside the repo in `~/.agent_controller/`.
 ## Desktop app (native window)
 `python app.py` opens the same interface in its own desktop window instead of a browser tab.
 It needs `pywebview` (included in `requirements.txt`) and runs the local server on a free port.
+The window runs in the background, so the terminal is free again as soon as it opens; its output goes to `~/.agent_controller/app.log`. `python app.py --console` keeps it in the terminal instead.
 The browser and terminal versions keep working.
 `python app.py --smoke` starts the server, checks that it responds, and exits without opening a window.
+
+### Using it on another project
+The agents work on the Git repository in the current folder, or on the one given with `--project`. Nothing from this folder has to be copied into that project. Example (PowerShell): `python 'C:\path\to\agents-world\app.py' --project 'C:\path\to\new-project'`
+- The project must be a Git repository with at least one commit and no uncommitted changes.
+- API keys stay in this folder's `.env`. A `.env` in the target project can still set `CLAUDE_MODEL`.
+- Task history is kept per project in `~/.agent_controller/<project folder name>.json`.
+- The same protected paths apply there (`agent_controller/`, `scripts/`, `tests/`, `CLAUDE.md`, `.git*`, `.env*`).
 
 Extra controls in the desktop app:
 - **Git**: read-only overview of the repository (remote, current branch, changed files, local and remote branches).

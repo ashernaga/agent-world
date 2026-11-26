@@ -1,11 +1,15 @@
 """Desktop app launcher for the agent controller.
 
-Run from the project root:   python app.py
+Run:   python app.py [--project PATH] [--console] [--smoke]
 
 Starts the existing local controller server on a free port and shows it
-in a native window (pywebview) instead of the system browser.
+in a native window (pywebview) instead of the system browser. The window
+runs in the background, so the terminal is free again right away.
+--project points the agents at another Git repository (default: the
+current folder), so the controller files never need to be copied there.
 """
 
+import argparse
 import json
 import os
 import re
@@ -18,13 +22,14 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from agent_controller import openai_agent
+from agent_controller import claude_agent, openai_agent, patch_applier, proposal, web_ui
 from agent_controller.claude_agent import _MODEL_PATTERN
 from agent_controller.config import OPENAI_API_KEY, OPENAI_MODEL as DEFAULT_OPENAI_MODEL
-from agent_controller.web_ui import HOST, PROJECT_ROOT, TOKEN, Handler
+from agent_controller.web_ui import HOST, TOKEN, Handler
 
 
 THEME_FILE = Path.home() / ".agent_controller" / "theme.txt"
+LOG_FILE = Path.home() / ".agent_controller" / "app.log"
 
 # Look & feel injected into the existing page (the page itself is untouched).
 # Dark is the default; the light palette overrides the same CSS variables.
@@ -309,6 +314,43 @@ def apply_models(settings):
     current_models.update(settings)
 
 
+def set_project(path):
+    """Point every controller module at the Git repository containing path.
+
+    The modules read PROJECT_ROOT on every call, so the agents work in that
+    repository while the controller and its .env (API keys) stay in this folder.
+    """
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], cwd=str(path),
+            capture_output=True, text=True, encoding="utf-8", timeout=15, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        raise SystemExit(f"Not a Git repository (or Git is missing): {path}  Use --project PATH.")
+    root = Path(top).resolve()
+    for module in (claude_agent, proposal, patch_applier, web_ui):
+        module.PROJECT_ROOT = root
+    # History stays per project, outside the repository.
+    web_ui.HISTORY_FILE = Path.home() / ".agent_controller" / f"{root.name}.json"
+    return root
+
+
+def detach(root):
+    """Restart the app without a console window, so the terminal is free again."""
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        flags = {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        flags = {"start_new_session": True}
+    with open(LOG_FILE, "a", encoding="utf-8") as log:
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--project", str(root)],
+            env=dict(os.environ, AGENT_APP_DETACHED="1"),
+            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, **flags,
+        )
+    print(f"Agent World opened for {root}. The terminal is free; log: {LOG_FILE}")
+
+
 class ThemedHandler(Handler):
     """Same server as web_ui, plus a saved light/dark theme and modern styling."""
 
@@ -334,7 +376,7 @@ class ThemedHandler(Handler):
                 return self._json({"error": "unauthorized"}, 401)
             try:
                 branch = subprocess.run(
-                    ["git", "branch", "--show-current"], cwd=PROJECT_ROOT,
+                    ["git", "branch", "--show-current"], cwd=web_ui.PROJECT_ROOT,
                     capture_output=True, text=True, encoding="utf-8", timeout=15,
                 ).stdout.strip()
             except (OSError, subprocess.SubprocessError) as error:
@@ -347,7 +389,7 @@ class ThemedHandler(Handler):
         try:
             out = subprocess.run(
                 ["git", "log", "-50", "--date=short", "--pretty=format:%h  %ad  %an  %s"],
-                cwd=PROJECT_ROOT, capture_output=True, text=True,
+                cwd=web_ui.PROJECT_ROOT, capture_output=True, text=True,
                 encoding="utf-8", timeout=15, check=True,
             ).stdout
         except (OSError, subprocess.SubprocessError) as error:
@@ -388,10 +430,23 @@ class ThemedHandler(Handler):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Agent World desktop app")
+    parser.add_argument("--project", default=".",
+                        help="Git repository the agents work on (default: current folder)")
+    parser.add_argument("--console", action="store_true",
+                        help="stay in this terminal instead of running in the background")
+    parser.add_argument("--smoke", action="store_true",
+                        help="start the server, check that it responds, and exit")
+    args = parser.parse_args()
+
     try:
         import webview
     except ImportError:
         raise SystemExit("pywebview is missing. Run: pip install -r requirements.txt")
+
+    root = set_project(Path(args.project).expanduser())
+    if not (args.smoke or args.console or os.environ.get("AGENT_APP_DETACHED")):
+        return detach(root)
 
     apply_models(load_models())
 
@@ -401,7 +456,7 @@ def main():
     url = f"http://{HOST}:{server.server_address[1]}/"
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    if "--smoke" in sys.argv:
+    if args.smoke:
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 print(f"smoke test OK: {url} -> HTTP {resp.status}")
@@ -411,7 +466,7 @@ def main():
         return
 
     webview.create_window(
-        f"Agent World - {PROJECT_ROOT.name}", url, width=1280, height=820, text_select=True
+        f"Agent World - {root.name}", url, width=1280, height=820, text_select=True
     )
     try:
         webview.start()
