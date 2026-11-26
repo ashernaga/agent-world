@@ -33,6 +33,7 @@ Extra controls in the desktop app:
 - **Git**: read-only overview of the repository (remote, current branch, changed files, local and remote branches).
 - **Commits**: the last 50 commits.
 - **Models**: per-role model choice (see below).
+- **Tokens**: token usage of every agent call (input, output, total), grouped by task, with a session total; the button shows the running total. Claude counts include cached input and the cost reported by the CLI. Counts are kept in memory until the app closes; "-" means the server did not report usage.
 - Theme button: switches between light and dark mode; the choice is saved to `~/.agent_controller/theme.txt`.
 - **Next steps**: after the GPT review of an applied change, copyable Git commands to commit it, commit it to a new `agent/...` branch (offered first when you are on `main` or `master`), or undo it while it is still uncommitted.
 
