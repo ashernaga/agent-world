@@ -7,6 +7,8 @@ in a native window (pywebview) instead of the system browser.
 """
 
 import json
+import os
+import re
 import threading
 import sys
 import subprocess
@@ -14,6 +16,11 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from openai import OpenAI
+
+from agent_controller import openai_agent
+from agent_controller.claude_agent import _MODEL_PATTERN
+from agent_controller.config import OPENAI_API_KEY, OPENAI_MODEL as DEFAULT_OPENAI_MODEL
 from agent_controller.web_ui import HOST, PROJECT_ROOT, TOKEN, Handler
 
 
@@ -50,6 +57,11 @@ textarea{border-radius:var(--r)}textarea:focus{outline:2px solid var(--accent);o
 .cp{float:right;height:22px;padding:0 8px;margin-left:8px;font-size:11px;background:var(--btn);color:var(--btn-t);border:0;cursor:pointer!important}
 #cbtn{margin-left:auto;height:30px;padding:0 12px;background:var(--btn);color:var(--btn-t);border:1px solid transparent;font-size:12px}
 #cbtn+#themebtn{margin-left:8px}
+#mbtn{margin-left:auto;height:30px;padding:0 12px;background:var(--btn);color:var(--btn-t);border:1px solid transparent;font-size:12px}
+#mbtn+#cbtn{margin-left:8px}
+.mf{display:block;margin:6px 0;font-size:12px;color:var(--mute)}
+.mf input{display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:6px 8px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;font:12.5px ui-monospace,Consolas,monospace}
+.mbar{display:flex;gap:8px;align-items:center;margin:12px 0 6px;flex-wrap:wrap}
 #ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:9}
 #ov.on{display:flex}
 #ovb{width:min(760px,92vw);max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 20px;-webkit-user-select:text;user-select:text}
@@ -90,6 +102,40 @@ THEME_JS = r"""
   var cb=document.createElement("button");cb.id="cbtn";cb.type="button";cb.textContent="Commits";
   cb.onclick=function(){get("/api/commits").then(function(c){show("Recent commits",c.error?[c.error]:c)})};
   document.querySelector("section h2").insertBefore(cb,b);
+  var mb=document.createElement("button");mb.id="mbtn";mb.type="button";mb.textContent="Models";
+  var PRESETS={"Cloud (.env defaults)":{planner:{model:"",base_url:""},proposer:{model:"",base_url:""}},
+    "Local Qwen (Ollama)":{planner:{model:"qwen3-coder",base_url:"http://localhost:11434/v1"},
+      proposer:{model:"qwen3-coder",base_url:"http://localhost:11434"}}};
+  mb.onclick=function(){get("/api/models").then(function(m){
+    if(m.error){show("Models",[m.error]);return}
+    show("Models",[]);var inputs={};
+    function field(role,key,label,ph){
+      var l=document.createElement("label");l.className="mf";l.textContent=label;
+      var i=document.createElement("input");i.value=(m.settings[role]||{})[key]||"";i.placeholder=ph;
+      l.append(i);box.append(l);inputs[role+"."+key]=i;
+    }
+    [["planner","Planner (GPT role, OpenAI-compatible API)"],["proposer","Proposer (Claude CLI, Anthropic-compatible API)"]].forEach(function(r){
+      var h=document.createElement("b");h.textContent=r[1];box.append(h);
+      field(r[0],"model","Model (empty = .env default)",m.defaults[r[0]]);
+      field(r[0],"base_url","Base URL (empty = cloud)",r[0]==="planner"?"http://localhost:11434/v1":"http://localhost:11434");
+    });
+    var bar=document.createElement("div");bar.className="mbar";var st=document.createElement("small");
+    Object.keys(PRESETS).forEach(function(n){
+      var p=document.createElement("button");p.type="button";p.className="nxc";p.textContent=n;
+      p.onclick=function(){Object.keys(inputs).forEach(function(k){var a=k.split(".");inputs[k].value=PRESETS[n][a[0]][a[1]]})};
+      bar.append(p);
+    });
+    var sv=document.createElement("button");sv.type="button";sv.className="nxc";sv.textContent="Save";
+    sv.onclick=function(){
+      var body={planner:{},proposer:{}};
+      Object.keys(inputs).forEach(function(k){var a=k.split(".");body[a[0]][a[1]]=inputs[k].value.trim()});
+      fetch("/api/models",{method:"POST",headers:{"X-Token":T,"Content-Type":"application/json"},body:JSON.stringify(body)})
+        .then(function(r){return r.json()}).then(function(r){st.textContent=r.error?"Error: "+r.error:"Saved - used from the next agent call."},
+          function(){st.textContent="Error: request failed"});
+    };
+    bar.append(sv,st);box.append(bar);
+  })};
+  document.querySelector("section h2").insertBefore(mb,cb);
   var hl=document.getElementById("histlist");
   hl.addEventListener("click",function(e){
     var el=e.target.closest(".h");if(!el)return;
@@ -182,6 +228,87 @@ def load_theme():
     return theme if theme in ("dark", "light") else "dark"
 
 
+MODELS_FILE = Path.home() / ".agent_controller" / "models.json"
+MODELS_LOCK = threading.Lock()
+ROLES = ("planner", "proposer")
+# The planner talks to an HTTP API, so vendor-style names such as
+# "Qwen/Qwen3-Coder-30B" are allowed. The proposer name goes to the Claude CLI
+# and reuses claude_agent's stricter pattern.
+_PLANNER_MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}")
+_URL_PATTERN = re.compile(r"https?://[^\s\"'<>]{1,200}")
+# Values from the environment/.env at startup; restored when a role goes back to cloud.
+_ENV_AT_START = {
+    key: os.environ.get(key)
+    for key in ("CLAUDE_MODEL", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
+}
+current_models = {role: {"model": "", "base_url": ""} for role in ROLES}
+
+
+def clean_models(data):
+    """Validate {"planner": {model, base_url}, "proposer": {...}}; empty means the .env default."""
+    if not isinstance(data, dict):
+        raise ValueError("expected a JSON object")
+    result = {}
+    for role in ROLES:
+        entry = data.get(role) or {}
+        if not isinstance(entry, dict):
+            raise ValueError(f"{role}: expected an object")
+        model = str(entry.get("model") or "").strip()
+        base_url = str(entry.get("base_url") or "").strip().rstrip("/")
+        pattern = _PLANNER_MODEL_PATTERN if role == "planner" else _MODEL_PATTERN
+        if model and not pattern.fullmatch(model):
+            raise ValueError(f"{role}: invalid model name")
+        if base_url and not _URL_PATTERN.fullmatch(base_url):
+            raise ValueError(f"{role}: base URL must start with http:// or https://")
+        result[role] = {"model": model, "base_url": base_url}
+    return result
+
+
+def load_models():
+    """Saved model choice from ~/.agent_controller/models.json (outside the repo)."""
+    try:
+        return clean_models(json.loads(MODELS_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return clean_models({})
+
+
+def _set_env(key, value):
+    if value:
+        os.environ[key] = value
+    else:
+        os.environ.pop(key, None)
+
+
+def apply_models(settings):
+    """Point both agents at the chosen models; takes effect on the next agent call.
+
+    API keys stay in .env. A base URL switches a role to another server:
+    the planner to any OpenAI-compatible API (Ollama, vLLM, LM Studio),
+    the proposer to an Anthropic-compatible API (e.g. Ollama) used by the
+    Claude CLI. LOCAL_LLM_API_KEY is optional; local servers ignore the key.
+    """
+    local_key = os.getenv("LOCAL_LLM_API_KEY") or "local"
+    planner, proposer = settings["planner"], settings["proposer"]
+
+    # ask_gpt() reads these module globals on every call.
+    openai_agent.OPENAI_MODEL = planner["model"] or DEFAULT_OPENAI_MODEL
+    if planner["base_url"]:
+        openai_agent.client = OpenAI(api_key=local_key, base_url=planner["base_url"])
+    else:
+        openai_agent.client = OpenAI(api_key=OPENAI_API_KEY)
+
+    # ask_claude() runs the CLI with this process's environment; load_dotenv()
+    # in get_claude_model() never overrides a value that is already set.
+    _set_env("CLAUDE_MODEL", proposer["model"] or _ENV_AT_START["CLAUDE_MODEL"])
+    if proposer["base_url"]:
+        _set_env("ANTHROPIC_BASE_URL", proposer["base_url"])
+        _set_env("ANTHROPIC_AUTH_TOKEN", local_key)
+    else:
+        _set_env("ANTHROPIC_BASE_URL", _ENV_AT_START["ANTHROPIC_BASE_URL"])
+        _set_env("ANTHROPIC_AUTH_TOKEN", _ENV_AT_START["ANTHROPIC_AUTH_TOKEN"])
+    current_models.update(settings)
+
+
 class ThemedHandler(Handler):
     """Same server as web_ui, plus a saved light/dark theme and modern styling."""
 
@@ -193,6 +320,15 @@ class ThemedHandler(Handler):
         super()._send(code, body, ctype)
 
     def do_GET(self):
+        if self.path.split("?")[0] == "/api/models":
+            if not self._local_only() or not self._authorized():
+                return self._json({"error": "unauthorized"}, 401)
+            with MODELS_LOCK:
+                settings = {role: dict(entry) for role, entry in current_models.items()}
+            return self._json({"settings": settings, "defaults": {
+                "planner": DEFAULT_OPENAI_MODEL,
+                "proposer": _ENV_AT_START["CLAUDE_MODEL"] or "Claude CLI default",
+            }})
         if self.path.split("?")[0] == "/api/branch":
             if not self._local_only() or not self._authorized():
                 return self._json({"error": "unauthorized"}, 401)
@@ -219,6 +355,8 @@ class ThemedHandler(Handler):
         self._json(out.splitlines())
 
     def do_POST(self):
+        if self.path == "/api/models":
+            return self._post_models()
         if self.path != "/api/theme":
             return super().do_POST()
         if not self._local_only() or not self._authorized():
@@ -234,12 +372,28 @@ class ThemedHandler(Handler):
         THEME_FILE.write_text(theme, encoding="utf-8")
         self._json({"ok": True})
 
+    def _post_models(self):
+        if not self._local_only() or not self._authorized():
+            return self._json({"error": "unauthorized"}, 401)
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            settings = clean_models(json.loads(self.rfile.read(length) or b"{}"))
+        except ValueError as error:
+            return self._json({"error": str(error)}, 400)
+        with MODELS_LOCK:
+            apply_models(settings)
+            MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            MODELS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        self._json({"ok": True, "settings": settings})
+
 
 def main():
     try:
         import webview
     except ImportError:
         raise SystemExit("pywebview is missing. Run: pip install -r requirements.txt")
+
+    apply_models(load_models())
 
     # Port 0 = let the OS pick a free port, so the app never clashes with
     # a running web_ui instance.
