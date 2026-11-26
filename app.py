@@ -16,6 +16,7 @@ import re
 import threading
 import sys
 import subprocess
+import time
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -64,6 +65,8 @@ textarea{border-radius:var(--r)}textarea:focus{outline:2px solid var(--accent);o
 #cbtn+#themebtn{margin-left:8px}
 #mbtn{margin-left:auto;height:30px;padding:0 12px;background:var(--btn);color:var(--btn-t);border:1px solid transparent;font-size:12px}
 #mbtn+#cbtn{margin-left:8px}
+#ubtn{margin-left:auto;height:30px;padding:0 12px;background:var(--btn);color:var(--btn-t);border:1px solid transparent;font-size:12px}
+#ubtn+#mbtn{margin-left:8px}
 .mf{display:block;margin:6px 0;font-size:12px;color:var(--mute)}
 .mf input{display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:6px 8px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;font:12.5px ui-monospace,Consolas,monospace}
 .mbar{display:flex;gap:8px;align-items:center;margin:12px 0 6px;flex-wrap:wrap}
@@ -77,6 +80,10 @@ textarea{border-radius:var(--r)}textarea:focus{outline:2px solid var(--accent);o
 .nxr pre{margin:0;padding:6px 8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .nxc{height:20px;padding:0 8px;font-size:11px;background:var(--btn);color:var(--btn-t);border:0;cursor:pointer!important}
 .ci{padding:6px 0;border-bottom:1px solid var(--line);font:12.5px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.uh{display:block;margin:12px 0 4px;font-size:12.5px}
+.ut{width:100%;margin-bottom:6px;border-collapse:collapse;font:12px/1.5 ui-monospace,Consolas,monospace}
+.ut th,.ut td{padding:3px 6px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.ut .n{text-align:right}
 """
 
 THEME_JS = r"""
@@ -141,6 +148,35 @@ THEME_JS = r"""
     bar.append(sv,st);box.append(bar);
   })};
   document.querySelector("section h2").insertBefore(mb,cb);
+  // ---- Token usage per agent call, grouped by task --------------------
+  function fmt(n){return n==null?"-":Number(n).toLocaleString("en-US")}
+  var ub=document.createElement("button");ub.id="ubtn";ub.type="button";ub.textContent="Tokens";
+  ub.title="Token usage per request";
+  function usageLabel(u){if(u&&u.totals)ub.textContent="Tokens: "+fmt(u.totals.total)}
+  function refreshUsage(){get("/api/usage").then(usageLabel,function(){})}
+  ub.onclick=function(){get("/api/usage").then(function(u){
+    if(u.error){show("Token usage",[u.error]);return}
+    usageLabel(u);
+    var t=u.totals,cost=t.cost?" | Claude CLI cost $"+t.cost.toFixed(4):"";
+    show("Token usage",["Session total: input "+fmt(t.input)+" | output "+fmt(t.output)+" | total "+fmt(t.total)+cost,
+      u.rows.length?"Counts are kept until the app is closed; '-' means the server did not report usage.":"No agent calls yet in this session."]
+      .concat(u.dropped>0?["The list shows the last "+u.rows.length+" calls; the "+u.dropped+" older calls are still counted in the total."]:[]));
+    var groups=[];
+    u.rows.forEach(function(r){var g=groups[groups.length-1];
+      if(!g||g.id!==r.task_id){g={id:r.task_id,task:r.task,rows:[],total:0};groups.push(g)}
+      g.rows.push(r);g.total+=r.total||0;});
+    groups.reverse().forEach(function(g){
+      var h=document.createElement("b");h.className="uh";h.textContent=(g.task||"(no task)")+" - "+fmt(g.total)+" tokens";box.append(h);
+      var tb=document.createElement("table");tb.className="ut";var hr=tb.insertRow();
+      ["Time","Step","Agent","Model","Input","Output","Total"].forEach(function(c,i){
+        var th=document.createElement("th");th.textContent=c;if(i>3)th.className="n";hr.append(th)});
+      g.rows.forEach(function(r){var tr=tb.insertRow();
+        [r.time,r.step,r.agent,r.model,fmt(r.input),fmt(r.output),fmt(r.total)].forEach(function(v,i){
+          var td=tr.insertCell();td.textContent=v||"-";if(i>3)td.className="n"})});
+      box.append(tb);
+    });
+  },function(){show("Token usage",["Error: request failed"])})};
+  document.querySelector("section h2").insertBefore(ub,mb);
   var hl=document.getElementById("histlist");
   hl.addEventListener("click",function(e){
     var el=e.target.closest(".h");if(!el)return;
@@ -218,7 +254,7 @@ THEME_JS = r"""
     });
   }
   var chat=document.getElementById("chat");
-  function decorate(){chat.querySelectorAll(".bub").forEach(addCopy);chat.querySelectorAll(".m.agent").forEach(addNext)}
+  function decorate(){chat.querySelectorAll(".bub").forEach(addCopy);chat.querySelectorAll(".m.agent").forEach(addNext);refreshUsage()}
   new MutationObserver(decorate).observe(chat,{childList:true});
   decorate();
 })();
@@ -298,9 +334,10 @@ def apply_models(settings):
     # ask_gpt() reads these module globals on every call.
     openai_agent.OPENAI_MODEL = planner["model"] or DEFAULT_OPENAI_MODEL
     if planner["base_url"]:
-        openai_agent.client = OpenAI(api_key=local_key, base_url=planner["base_url"])
+        client = OpenAI(api_key=local_key, base_url=planner["base_url"])
     else:
-        openai_agent.client = OpenAI(api_key=OPENAI_API_KEY)
+        client = OpenAI(api_key=OPENAI_API_KEY)
+    openai_agent.client = UsageTrackingClient(client)
 
     # ask_claude() runs the CLI with this process's environment; load_dotenv()
     # in get_claude_model() never overrides a value that is already set.
@@ -312,6 +349,140 @@ def apply_models(settings):
         _set_env("ANTHROPIC_BASE_URL", _ENV_AT_START["ANTHROPIC_BASE_URL"])
         _set_env("ANTHROPIC_AUTH_TOKEN", _ENV_AT_START["ANTHROPIC_AUTH_TOKEN"])
     current_models.update(settings)
+
+
+# Token usage of every agent call in this app session (kept in memory only).
+USAGE = []
+USAGE_LOCK = threading.Lock()
+USAGE_LIMIT = 500  # rows kept for the per-call list; totals below count every call
+SESSION_TOTALS = {"input": 0, "output": 0, "total": 0, "cost": 0.0, "calls": 0}
+
+
+def _tokens(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _current_task():
+    """(id, text, step name) of the task the page is running, read from web_ui's session."""
+    session = web_ui.S
+    with session.lock:
+        step = session.step
+        task_id, task = None, ""
+        for event in reversed(session.events):
+            if event["kind"] == "user":
+                task_id, task = event["id"], event["text"][:120]
+                break
+    name = web_ui.STEPS[step - 1] if 1 <= step <= len(web_ui.STEPS) else ""
+    return task_id, task, name
+
+
+def record_usage(agent, model, input_tokens, output_tokens, cost=None):
+    """Store one agent call. Never raises: usage tracking must not break a task."""
+    try:
+        task_id, task, step = _current_task()
+        input_tokens, output_tokens = _tokens(input_tokens), _tokens(output_tokens)
+        total = None
+        if input_tokens is not None or output_tokens is not None:
+            total = (input_tokens or 0) + (output_tokens or 0)
+        row = {
+            "time": time.strftime("%H:%M:%S"), "task_id": task_id, "task": task,
+            "step": step, "agent": agent, "model": str(model or ""),
+            "input": input_tokens, "output": output_tokens, "total": total,
+            "cost": float(cost) if isinstance(cost, (int, float)) else None,
+        }
+        with USAGE_LOCK:
+            for key in ("input", "output", "total", "cost"):
+                SESSION_TOTALS[key] += row[key] or 0
+            SESSION_TOTALS["calls"] += 1
+            USAGE.append(row)
+            del USAGE[:-USAGE_LIMIT]
+    except Exception as error:
+        print(f"Token usage not recorded: {error}")
+
+
+def usage_totals(rows):
+    totals = {"input": 0, "output": 0, "total": 0, "cost": 0.0}
+    for row in rows:
+        for key in totals:
+            totals[key] += row[key] or 0
+    return totals
+
+
+class _UsageTrackingResponses:
+    def __init__(self, responses):
+        self._responses = responses
+
+    def create(self, **kwargs):
+        response = self._responses.create(**kwargs)
+        usage = getattr(response, "usage", None)
+        record_usage("GPT", kwargs.get("model"),
+                     getattr(usage, "input_tokens", None), getattr(usage, "output_tokens", None))
+        return response
+
+
+class UsageTrackingClient:
+    """Wraps the OpenAI client used by ask_gpt() and records each response's usage."""
+
+    def __init__(self, client):
+        self._client = client
+        self.responses = _UsageTrackingResponses(client.responses)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+class ClaudeUsageSubprocess:
+    """Replaces the subprocess module inside claude_agent only.
+
+    ask_claude() runs the Claude CLI with "--output-format text", which has no
+    token counts. This asks for "json" instead, records the reported usage and
+    hands the plain result text back, so ask_claude() keeps working unchanged.
+    """
+
+    def __getattr__(self, name):
+        return getattr(subprocess, name)
+
+    def run(self, command, **kwargs):
+        command = list(command)
+        for i in range(len(command) - 1):
+            if command[i] == "--output-format" and command[i + 1] == "text":
+                command[i + 1] = "json"
+                break
+        else:
+            return subprocess.run(command, **kwargs)
+        result = subprocess.run(command, **kwargs)
+        try:
+            data = json.loads(result.stdout or "")
+        except ValueError:
+            # Not JSON (older CLI, or it ignored the flag): the output is the
+            # plain text answer, so pass it through untouched.
+            return result
+        if not isinstance(data, dict) or "result" not in data and "usage" not in data:
+            # JSON, but not the CLI's result object: it may be the answer itself.
+            return result
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        parts = [usage.get(key) for key in (
+            "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")]
+        parts = [p for p in parts if _tokens(p) is not None]
+        models = data.get("modelUsage")
+        model = ", ".join(models) if isinstance(models, dict) and models else (
+            os.environ.get("CLAUDE_MODEL") or "Claude CLI default")
+        record_usage("Claude", model, sum(parts) if parts else None,
+                     usage.get("output_tokens"), data.get("total_cost_usd"))
+        text = data.get("result")
+        if isinstance(text, str) and not data.get("is_error"):
+            result.stdout = text
+            return result
+        # No usable answer (for example max turns reached or an API error).
+        # Make ask_claude() raise a clear error instead of passing a
+        # placeholder on to proposal parsing.
+        reason = data.get("subtype") or "unknown"
+        detail = text if isinstance(text, str) else ""
+        result.returncode = result.returncode or 1
+        result.stderr = (result.stderr or "") + (
+            f"Claude CLI returned no usable result ({reason}). {detail}".strip())
+        result.stdout = ""
+        return result
 
 
 def set_project(path):
@@ -371,6 +542,17 @@ class ThemedHandler(Handler):
                 "planner": DEFAULT_OPENAI_MODEL,
                 "proposer": _ENV_AT_START["CLAUDE_MODEL"] or "Claude CLI default",
             }})
+        if self.path.split("?")[0] == "/api/usage":
+            if not self._local_only() or not self._authorized():
+                return self._json({"error": "unauthorized"}, 401)
+            with USAGE_LOCK:
+                rows = [dict(row) for row in USAGE]
+                totals = dict(SESSION_TOTALS)
+            # Totals cover the whole session; only the oldest rows are dropped
+            # from the list once it passes USAGE_LIMIT.
+            return self._json({"rows": rows, "totals": totals,
+                               "shown_totals": usage_totals(rows),
+                               "dropped": totals["calls"] - len(rows)})
         if self.path.split("?")[0] == "/api/branch":
             if not self._local_only() or not self._authorized():
                 return self._json({"error": "unauthorized"}, 401)
@@ -449,6 +631,8 @@ def main():
         return detach(root)
 
     apply_models(load_models())
+    # Record the Claude CLI's token usage (see ClaudeUsageSubprocess).
+    claude_agent.subprocess = ClaudeUsageSubprocess()
 
     # Port 0 = let the OS pick a free port, so the app never clashes with
     # a running web_ui instance.
