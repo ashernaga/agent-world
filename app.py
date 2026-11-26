@@ -113,6 +113,15 @@ textarea{border-radius:var(--r)}textarea:focus{outline:2px solid var(--accent);o
 @keyframes hop{40%{transform:translateY(-12px)}}
 @keyframes shake{25%{transform:translateX(-2px)}75%{transform:translateX(2px)}}
 @media (prefers-reduced-motion:reduce){.npc svg{animation:none!important}}
+/* Scrollbars that follow the theme (WebView2/Chromium) */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#363d4f;border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--btn-h);background-clip:padding-box}
+:root[data-theme=light] ::-webkit-scrollbar-thumb{background:#c6ccd8;background-clip:padding-box}
+:root[data-theme=light] ::-webkit-scrollbar-thumb:hover{background:#a9b0bf;background-clip:padding-box}
+::-webkit-scrollbar-button{display:none;width:0;height:0}
+::-webkit-scrollbar-corner{background:transparent}
 """
 
 THEME_JS = r"""
