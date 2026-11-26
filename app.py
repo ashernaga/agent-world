@@ -84,6 +84,35 @@ textarea{border-radius:var(--r)}textarea:focus{outline:2px solid var(--accent);o
 .ut{width:100%;margin-bottom:6px;border-collapse:collapse;font:12px/1.5 ui-monospace,Consolas,monospace}
 .ut th,.ut td{padding:3px 6px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
 .ut .n{text-align:right}
+#fsbtn{margin-left:8px;width:34px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:var(--btn);color:var(--btn-t);border:1px solid transparent}
+#fsbtn:hover{background:var(--btn-h)}
+#fsbtn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#room{position:relative;flex:none;height:136px;overflow:hidden;border-bottom:1px solid var(--line);
+  background:linear-gradient(to bottom,#151a26 0,#151a26 52%,transparent 52%),
+  repeating-linear-gradient(90deg,#1c2232 0 16px,#20273a 16px 32px);transition:height .25s}
+:root[data-theme=light] #room{background:linear-gradient(to bottom,#e8ecf6 0,#e8ecf6 52%,transparent 52%),
+  repeating-linear-gradient(90deg,#d6dceb 0 16px,#dde2ef 16px 32px)}
+#room.min{height:26px}
+#room.min .npc,#room.min .prop{display:none}
+#room .rt{position:absolute;left:12px;top:6px;font-size:11px;color:var(--mute);letter-spacing:.04em}
+#room .rb{position:absolute;right:8px;top:4px;height:20px;padding:0 8px;font-size:11px;background:var(--btn);color:var(--btn-t);border:0}
+#room .prop{position:absolute;bottom:30px;transform:translateX(-50%);image-rendering:pixelated}
+.npc{position:absolute;bottom:22px;width:42px;height:45px;transform:translateX(-50%);will-change:left}
+.npc svg{display:block;width:42px;height:45px;shape-rendering:crispEdges}
+.npc .f2{display:none}.npc.step .f1{display:none}.npc.step .f2{display:block}
+.npc .flip{transform:scaleX(-1)}
+.npc .tag{position:absolute;left:50%;top:46px;transform:translateX(-50%);font-size:9.5px;color:var(--mute);white-space:nowrap}
+.npc .say{position:absolute;left:50%;bottom:52px;transform:translateX(-50%);padding:3px 8px;border-radius:8px;
+  background:var(--panel);border:1px solid var(--line);color:var(--text);font-size:11px;white-space:nowrap;display:none}
+.npc .say::after{content:"";position:absolute;left:50%;bottom:-5px;margin-left:-4px;border:4px solid transparent;border-top-color:var(--line);border-bottom:0}
+.npc.talk .say{display:block}
+.npc.busy svg{animation:bob .6s ease-in-out infinite}
+.npc.jump svg{animation:hop .45s ease-out 3}
+.npc.sad svg{animation:shake .35s linear 2}
+@keyframes bob{50%{transform:translateY(-2px)}}
+@keyframes hop{40%{transform:translateY(-12px)}}
+@keyframes shake{25%{transform:translateX(-2px)}75%{transform:translateX(2px)}}
+@media (prefers-reduced-motion:reduce){.npc svg{animation:none!important}}
 """
 
 THEME_JS = r"""
@@ -257,6 +286,124 @@ THEME_JS = r"""
   function decorate(){chat.querySelectorAll(".bub").forEach(addCopy);chat.querySelectorAll(".m.agent").forEach(addNext);refreshUsage()}
   new MutationObserver(decorate).observe(chat,{childList:true});
   decorate();
+  // ---- Agent room: small pixel NPCs that act out the workflow ------------
+  (function(){
+    var FS='<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+        FSX='<svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>';
+    var fb=document.createElement("button");fb.id="fsbtn";fb.type="button";fb.title="Full screen (F11)";fb.innerHTML=FS;
+    document.querySelector("section h2").append(fb);
+    var full=false;
+    function toggleFull(){
+      var api=window.pywebview&&window.pywebview.api;
+      if(api&&api.toggle_fullscreen){api.toggle_fullscreen();full=!full}
+      else if(document.fullscreenElement){document.exitFullscreen();full=false}
+      else if(document.documentElement.requestFullscreen){document.documentElement.requestFullscreen();full=true}
+      fb.innerHTML=full?FSX:FS;fb.title=full?"Exit full screen (F11)":"Full screen (F11)";
+    }
+    fb.onclick=toggleFull;
+    document.addEventListener("keydown",function(e){
+      if(e.key==="F11"){e.preventDefault();toggleFull()}
+      else if(e.key==="Escape"&&full&&!document.getElementById("ov").classList.contains("on")){toggleFull()}
+    });
+
+    // Pixel sprites: o outline, b body, f face screen, e eyes, a antenna tip.
+    var TOP=["......a.....","......o.....","..oooooooo..",".obbbbbbbbo.",".obffffffbo.",".obfeffefbo.",
+             ".obffffffbo.",".obbbbbbbbo.","..oooooooo..","...obbbbo..."];
+    var LEGS=[["..obbbbbbo..","...oo..oo...","..ooo..oo..."],["..obbbbbbo..","...oo..oo...","...oo..ooo.."]];
+    function sprite(col,legs,cls){
+      var pal={o:"#0b0d12",b:col,f:"#141925",e:"#9dffcf",a:col},rows=TOP.concat(legs),r="";
+      rows.forEach(function(row,y){for(var x=0;x<row.length;x++){var c=pal[row[x]];
+        if(c)r+='<rect x="'+x+'" y="'+y+'" width="1.02" height="1.02" fill="'+c+'"/>'}});
+      return '<svg class="'+cls+'" viewBox="0 0 12 13">'+r+'</svg>';
+    }
+    var sec=document.querySelector("section"),room=document.createElement("div");room.id="room";
+    var title=document.createElement("span");title.className="rt";title.textContent="AGENT ROOM";
+    var rb=document.createElement("button");rb.className="rb";rb.type="button";
+    room.append(title,rb);sec.insertBefore(room,document.getElementById("chat"));
+    var desk=document.createElement("div");desk.className="prop";desk.style.left="calc(50% - 46px)";
+    desk.innerHTML='<svg width="44" height="30" viewBox="0 0 22 15" shape-rendering="crispEdges">'+
+      '<rect x="3" y="0" width="16" height="10" fill="#0b0d12"/><rect x="4" y="1" width="14" height="8" fill="#1e3a5f"/>'+
+      '<rect x="5" y="2" width="6" height="1" fill="#7aa2ff"/><rect x="5" y="4" width="9" height="1" fill="#3ecf8e"/>'+
+      '<rect x="5" y="6" width="5" height="1" fill="#ff6b6b"/><rect x="10" y="10" width="2" height="2" fill="#0b0d12"/>'+
+      '<rect x="0" y="12" width="22" height="3" fill="#3a4254"/></svg>';
+    room.append(desk);
+    var minKey="agentRoomMin";
+    function setMin(m){room.classList.toggle("min",m);rb.textContent=m?"Show":"Hide";try{localStorage.setItem(minKey,m?"1":"")}catch(e){}}
+    var startMin=false;try{startMin=!!localStorage.getItem(minKey)}catch(e){}
+    setMin(startMin);rb.onclick=function(){setMin(!room.classList.contains("min"))};
+
+    var reduce=window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var cast=[["planner","Planner","#10a37f"],["proposer","Proposer","#d97757"],
+              ["reviewer","Reviewer","#8b5cf6"],["controller","Controller","#6b7488"]];
+    var npc={};
+    cast.forEach(function(c,i){
+      var el=document.createElement("div");el.className="npc";
+      var wrap=document.createElement("div");
+      wrap.innerHTML=sprite(c[2],LEGS[0],"f1")+sprite(c[2],LEGS[1],"f2");
+      var tag=document.createElement("span");tag.className="tag";tag.textContent=c[1];
+      var say=document.createElement("span");say.className="say";
+      el.append(say,wrap,tag);room.append(el);
+      npc[c[0]]={el:el,wrap:wrap,say:say,x:0.15+0.22*i,tx:0.15+0.22*i,wait:Math.random()*120,mode:"idle",tick:0};
+    });
+    function W(){return room.clientWidth||600}
+    function speak(n,text){n.say.textContent=text||"";n.el.classList.toggle("talk",!!text)}
+    function goTo(n,frac,text,busy){n.mode="task";n.tx=frac;speak(n,text);n.el.classList.toggle("busy",!!busy)}
+    function relax(n){n.mode="idle";n.wait=40+Math.random()*120;speak(n,"");n.el.classList.remove("busy")}
+    function flash(name,cls,text,ms){var n=npc[name];speak(n,text);n.el.classList.remove(cls);void n.el.offsetWidth;
+      n.el.classList.add(cls);setTimeout(function(){n.el.classList.remove(cls);if(n.mode==="idle")speak(n,"")},ms||1800)}
+
+    var ROLE={1:["planner","Planning..."],2:["proposer","Writing a diff..."],4:["controller","Applying patch..."],
+              5:["controller","Running checks..."],6:["reviewer","Reviewing..."]};
+    function stage(status,step){
+      Object.keys(npc).forEach(function(k){relax(npc[k])});
+      if(status==="awaiting_approval"){
+        goTo(npc.controller,0.5,"Your call!",true);
+        goTo(npc.planner,0.28,"");goTo(npc.proposer,0.36,"");goTo(npc.reviewer,0.64,"");
+        return;
+      }
+      var r=ROLE[step];
+      if(status!=="idle"&&r){goTo(npc[r[0]],0.5,r[1],true);
+        if(step===2)goTo(npc.planner,0.3,"");
+        if(step>=5)goTo(npc.proposer,0.3,"");}
+    }
+    function loop(){
+      var w=W();
+      Object.keys(npc).forEach(function(k){
+        var n=npc[k];
+        if(n.mode==="idle"&&!reduce){
+          if(n.wait>0)n.wait--;
+          else if(Math.abs(n.x-n.tx)<0.004){n.tx=0.06+Math.random()*0.88;n.wait=60+Math.random()*200;
+            if(Math.random()<0.08)flash(k,"jump","",900);}
+        }
+        var dx=n.tx-n.x,step=(n.mode==="task"?2.2:0.9)/w;
+        var moving=Math.abs(dx)>step;
+        if(reduce){n.x=n.tx;moving=false}
+        else if(moving){n.x+=dx>0?step:-step;n.wrap.className=dx<0?"flip":""}
+        n.tick++;
+        n.el.classList.toggle("step",moving&&Math.floor(n.tick/9)%2===0);
+        n.el.style.left=(n.x*100)+"%";
+      });
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    var cursor=null,last="";
+    function watch(){
+      get("/api/state?since="+(cursor===null?0:cursor)).then(function(s){
+        var key=s.status+":"+s.step;
+        if(key!==last){last=key;stage(s.status,s.step)}
+        if(cursor!==null)s.events.forEach(function(e){
+          if(e.kind==="error")flash("controller","sad","Uh oh!",2600);
+          else if(e.kind==="user")flash("planner","jump","On it!",1500);
+          else if(e.kind==="system"&&/^Done\./.test(e.text))
+            ["planner","proposer","reviewer","controller"].forEach(function(k){flash(k,"jump","Done!",2200)});
+          else if(e.kind==="system"&&/rejected/i.test(e.text))flash("proposer","sad","Okay...",2000);
+        });
+        cursor=s.next;
+      },function(){}).then(function(){setTimeout(watch,1200)});
+    }
+    watch();
+  })();
 })();
 """
 
@@ -611,6 +758,19 @@ class ThemedHandler(Handler):
         self._json({"ok": True, "settings": settings})
 
 
+# The native window, kept outside WindowApi so pywebview does not try to
+# expose the window object itself to the page.
+_WINDOWS = []
+
+
+class WindowApi:
+    """Methods the page can call as window.pywebview.api.<name>()."""
+
+    def toggle_fullscreen(self):
+        if _WINDOWS:
+            _WINDOWS[0].toggle_fullscreen()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Agent World desktop app")
     parser.add_argument("--project", default=".",
@@ -649,9 +809,10 @@ def main():
             server.server_close()
         return
 
-    webview.create_window(
-        f"Agent World - {root.name}", url, width=1280, height=820, text_select=True
-    )
+    _WINDOWS.append(webview.create_window(
+        f"Agent World - {root.name}", url, width=1280, height=820, text_select=True,
+        js_api=WindowApi(),
+    ))
     try:
         webview.start()
     finally:
